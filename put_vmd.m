@@ -20,7 +20,7 @@
 % 说明3：main_test 里实测数据才需要的 f_phaseDenoise 脉冲去噪此处省略，
 %        仿真回波无随机噪声；其调用方式以注释保留在相位提取处。
 %
-% 输出：PNG（300 dpi）存到  数字孪生素材_开题报告/图/（默认加噪 SNR=45 dB，σ_n=RMS/10^(SNR/20)）
+% 输出：PNG（300 dpi）存到  数字孪生素材_开题报告/图/（默认加噪 SNR=50 dB，σ_n=RMS/10^(SNR/20)）
 %   组合图（保留）：fig6 全IMF时域、fig7 全IMF频谱、fig8 呼吸/心搏 2x2
 %   fig9 谱峰对照（总体系一归一化，保留心搏/呼吸实际幅度比）
 %   独立图（新增）：vmd_imf1..7_时域 / _频谱（每模态时域、频谱各一张）
@@ -77,7 +77,12 @@ z_min_chest = -0.2;  z_max_chest = 0.2;
 T_h_heart    = 0.8;       % 心跳周期 [s] (约 75 bpm)
 tau_h_heart  = T_h_heart / 3;
 sigma_h_heart= T_h_heart / 5;
-d_h_heart    = 0.003;     % 心脏最大形变位移 [m]
+% 心搏驱动模型（put_vmd 信号级孪生）：
+%   'gauss'（默认）：wanzheng.m 式高斯脉冲(τ=T/3,σ=T/5)，贴"心搏搏动"；
+%           在较高 SNR(如 50dB)下 VMD 可把 1.25Hz 基波干净分离成独立模态(2.5Hz 谐波在别的模态)。
+%   'sine'：单频 1.25 Hz（零谐波），但会改变回波最强 bin 选择、呼吸相位谐波可能更大，较少用。
+heart_model = 'gauss';
+d_h_heart    = 0.003;     % 心脏最大形变位移 [m]（gauss 时：深部心脏随组织衰减见 w_heart）
 direction_heart = [-0.5, -1.0, 0.0];
 x_min_heart = -0.016; x_max_heart = 0.03;
 y_min_heart = -0.02;  y_max_heart = 0.01;
@@ -104,10 +109,11 @@ card_wxyz  = [0.035 0.05 0.04];      % 心前区高斯包络展宽 [m]（x, y, z
 %   sigma_n = RMS(无噪回波) / 10^(SNR_dB/20)，RMS 取整个回波复数幅度均方根。
 % 固定 rng 种子保证可复现；只调 SNR_dB 即可扫不同信噪比（配合 reuse_Mix=true 免重仿真）。
 add_noise = true;
-% 默认 45 dB：噪声按"整回波 RMS"计(σ_n=RMS/10^(SNR/20))。量测阈值：1mm 体表心搏要在
-% VMD 中成独立模态约需 >=45 dB；40 开始退化，35 及以下心搏被噪声淹没(仅呼吸仍稳)。
-% 若想演示低信噪比下的心搏失效，把 SNR_dB 调低即可。
-SNR_dB    = 45;                      % 信噪比 [dB]
+% 默认 50 dB：噪声按"整回波 RMS"计(σ_n=RMS/10^(SNR/20))，已尽量小但不为0（仍体现噪声项）。
+% 选择说明：该 σ 基准较严苛，1mm 高斯心搏需 ~50dB 才能让 VMD 把 1.25Hz 基波干净分离成独立
+% 模态（低 SNR 时 2.5Hz 谐波/噪声会混进心搏模态，频谱出现比 1.25Hz 更高的峰）。想演示低
+% SNR 心搏退化，把 SNR_dB 调小即可（呼吸仍稳）。
+SNR_dB    = 50;                      % 信噪比 [dB]
 rng_seed  = 0;
 
 % ---------------- 真值（由周期推出，供对照，不硬编码） ----------------
@@ -297,9 +303,16 @@ else
     for frame = 1:Nframe
         M_t_chest = MpB(1 + mod(frame-1, perB));    % 呼吸四段式（平滑后）
         t = (frame-1)/fps;
-        % 心搏高斯脉冲（心脏）
+        % 心搏驱动（心脏/体表心搏）
         t_mod_heart = mod(t, T_h_heart);
-        M_t_heart = exp(-((t_mod_heart - tau_h_heart)/sigma_h_heart)^2);
+        switch lower(heart_model)
+            case 'sine'
+                M_t_heart = sin(2*pi*t_mod_heart/T_h_heart);       % 单频 1.25 Hz
+            case 'gauss'
+                M_t_heart = exp(-((t_mod_heart - tau_h_heart)/sigma_h_heart)^2);
+            otherwise
+                error('heart_model 需为 ''sine'' 或 ''gauss''');
+        end
 
         V_frame_gpu = Vertices_all_gpu + M_t_chest*breathF_gpu + M_t_heart*cardF_gpu;
 
@@ -486,7 +499,7 @@ title(['心跳信号时域（IMF',num2str(hb_idx),'）']); ylabel('幅度'); xla
 subplot(2,2,4);
 plot(freqs, heart_fre,'LineWidth',0.9,'Color',[0.8 0.2 0.2]); grid on; hold on;
 plot(fh_peak, max(heart_fre(maskH)),'rv','MarkerSize',8,'LineWidth',1.5);
-title(['心跳信号频谱（IMF',num2str(hb_idx),'）']); ylabel('幅度'); xlabel('频率 (Hz)'); xlim([0 3]);
+title(['心跳信号频谱（IMF',num2str(hb_idx),'）']); ylabel('幅度'); xlabel('频率 (Hz)'); xlim([0 2]);
 text(fh_peak, max(heart_fre(maskH)), sprintf('  %.2f Hz = %.1f 次/min',fh_peak,HR_meas),'Color','r');
 sgtitle('VMD 分离的呼吸与心搏信号（时域 + 频谱）');
 exportgraphics(fig, fullfile(outdir,'fig8_VMD呼吸心搏分离_时域频谱.png'),'Resolution',300);
@@ -546,8 +559,7 @@ plot(freqs(ir9), breath_fre(ir9),'rv','MarkerSize',8,'LineWidth',1.5);
 title(['呼吸信号频谱（IMF',num2str(resp_idx),'）']); xlabel('频率 (Hz)'); ylabel('幅度'); xlim([0 3]);
 text(freqs(ir9), breath_fre(ir9), sprintf('  %.2f Hz = %.1f 次/min',freqs(ir9),BR_meas),'Color','r');
 exportgraphics(fig, fullfile(outdir,'vmd_呼吸_频谱.png'),'Resolution',300);
-close(fig);
-% 心跳 时域
+close(fig);% 心跳 时域
 fig = figure('Color','w','Position',[40 40 820 360]);
 plot(t_axis, hb_IMF,'LineWidth',0.9,'Color',[0.8 0.2 0.2]); grid on;
 title(['心跳信号时域（IMF',num2str(hb_idx),'）']); xlabel('时间 (s)'); ylabel('幅度');
@@ -557,7 +569,7 @@ close(fig);
 fig = figure('Color','w','Position',[40 40 820 360]);
 plot(freqs, heart_fre,'LineWidth',0.9,'Color',[0.8 0.2 0.2]); grid on; hold on;
 plot(freqs(ih9), heart_fre(ih9),'rv','MarkerSize',8,'LineWidth',1.5);
-title(['心跳信号频谱（IMF',num2str(hb_idx),'）']); xlabel('频率 (Hz)'); ylabel('幅度'); xlim([0 3]);
+title(['心跳信号频谱（IMF',num2str(hb_idx),'）']); xlabel('频率 (Hz)'); ylabel('幅度'); xlim([0 2]);
 text(freqs(ih9), heart_fre(ih9), sprintf('  %.2f Hz = %.1f 次/min',freqs(ih9),HR_meas),'Color','r');
 exportgraphics(fig, fullfile(outdir,'vmd_心跳_频谱.png'),'Resolution',300);
 close(fig);
