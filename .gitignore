@@ -1,0 +1,15 @@
+# 大体积三维/动画/数据/日志（git 只传代码文档）
+*.stl
+*.gif
+*.mat
+*.log
+
+# 工具缓存与生成物
+.spec-workflow/
+__pycache__/
+*.pyc
+
+# 系统文件
+Thumbs.db
+.DS_Store
+desktop.ini
