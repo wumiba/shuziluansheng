@@ -26,6 +26,7 @@
 %   独立图（新增）：vmd_imf1..7_时域 / _频谱（每模态时域、频谱各一张）
 %                vmd_呼吸_时域 / vmd_呼吸_频谱 / vmd_心跳_时域 / vmd_心跳_频谱
 %                fig10 雷达距离-时间图（RX1 第一chirp，加噪后）
+%                fig11 VMD 前差分相位信号（时域+频谱，含呼吸/心搏频带标注）
 %   并在命令行打印 测得 BR/HR 与真值(60/T_b, 60/T_h_heart) 对照。
 % =========================================================================
 
@@ -402,6 +403,36 @@ angleDenoised = diff(phase_bin);                      % 相位增量序列（Nfr
 % for ii=3:numel(angleDenoised)
 %     angleDenoised2(ii)=f_phaseDenoise(angleDenoised(ii-2),angleDenoised(ii-1),angleDenoised(ii),0.3);
 % end
+
+%% ==================== 出图：VMD 前 差分相位信号（时域 + 频谱） ====================
+% 即喂给 VMD 的原始相位增量信号（含噪声），展示分离前的整体面貌：时域、频谱，
+% 频谱中呼吸带(0.1-0.5Hz)与心搏带(0.8-2Hz)用浅色带标出并读 pre-VMD 峰频。
+Lpre  = numel(angleDenoised);
+frpre = (-floor(Lpre/2):ceil(Lpre/2)-1)*(fs/Lpre);
+sppre = abs(fftshift(fft(angleDenoised))); sppre = sppre/max(sppre);
+mRpre = frpre>=0.1 & frpre<=0.5; [~,iRpre] = max(sppre.*mRpre);  fRpre = frpre(iRpre);
+mHpre = frpre>=0.8 & frpre<=2;   [~,iHpre] = max(sppre.*mHpre);  fHpre = frpre(iHpre);
+
+fig = figure('Color','w','Position',[60 60 1080 460]);
+subplot(1,2,1);
+plot((0:Lpre-1)/fs, angleDenoised,'LineWidth',0.5,'Color',[0.15 0.25 0.45]); grid on;
+title('VMD 前 差分相位信号（时域）'); xlabel('时间 (s)'); ylabel('相位增量 (rad)');
+xlim([0 (Lpre-1)/fs]);
+
+subplot(1,2,2);
+plot(frpre, sppre,'LineWidth',0.8,'Color',[0.15 0.25 0.45]); grid on; hold on;
+yl = ylim;
+patch([0.1 0.5 0.5 0.1],[yl(1) yl(1) yl(2) yl(2)],[0.2 0.6 0.2],'FaceAlpha',0.12,'EdgeColor','none');
+patch([0.8 2.0 2.0 0.8],[yl(1) yl(1) yl(2) yl(2)],[0.85 0.35 0.35],'FaceAlpha',0.12,'EdgeColor','none');
+xlim([0 3]); ylim([0 1.22]);
+plot([fRpre fRpre],[0 1.22],'k--','LineWidth',0.6);
+plot([fHpre fHpre],[0 1.22],'k--','LineWidth',0.6);
+text(fRpre, 1.16, sprintf('呼吸峰 %.2f Hz', fRpre), 'HorizontalAlignment','center','FontSize',8,'Color',[0.1 0.5 0.1]);
+text(fHpre, 1.10, sprintf('心搏峰 %.2f Hz', fHpre), 'HorizontalAlignment','center','FontSize',8,'Color',[0.7 0.1 0.1]);
+xlabel('频率 (Hz)'); ylabel('归一化幅度');
+title(['VMD 前 信号频谱（SNR=',num2str(SNR_dB),' dB）']);
+exportgraphics(fig, fullfile(outdir,'fig11_VMD前差分相位信号_时域与频谱.png'),'Resolution',300);
+close(fig);
 
 %% ==================== VMD 变分模态分解（参数同 main_test.m） ====================
 K     = 7;       % 模态数
