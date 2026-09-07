@@ -20,7 +20,7 @@
 % 说明3：main_test 里实测数据才需要的 f_phaseDenoise 脉冲去噪此处省略，
 %        仿真回波无随机噪声；其调用方式以注释保留在相位提取处。
 %
-% 输出：PNG（300 dpi）存到  数字孪生素材_开题报告/图/（默认加噪 SNR=20 dB，σ_n=RMS/10^(SNR/20)）
+% 输出：PNG（300 dpi）存到  数字孪生素材_开题报告/图/（默认加噪 SNR=45 dB，σ_n=RMS/10^(SNR/20)）
 %   组合图（保留）：fig6 全IMF时域、fig7 全IMF频谱、fig8 呼吸/心搏 2x2
 %   fig9 谱峰对照（总体系一归一化，保留心搏/呼吸实际幅度比）
 %   独立图（新增）：vmd_imf1..7_时域 / _频谱（每模态时域、频谱各一张）
@@ -46,7 +46,7 @@ Nframe       = total_frames;
 %% 数据来源开关：已用本脚本(含体表心搏脉冲)跑过并保存了无噪 Mix，
 % 设 true 直接加载再按 SNR 加噪，改 SNR/出图不用重跑 GPU 仿真(~92s)。
 % 若改了 STL 或 d_h_card 等仿真参数，需临时设 false 重仿真。
-reuse_Mix = false;
+reuse_Mix = true;
 mix_mat   = fullfile(thisdir,'put_vmd_Mix_40s.mat');
 
 %% ==================== === 生理模型参数（与 wanzheng.m 一致） ====================
@@ -60,6 +60,14 @@ tau_h_chest    = T_h_chest / 3;
 sigma_h_chest  = T_h_chest / 5;
 d_h_chest      = 0.003;      % 胸腔最大形变位移 [m]
 direction_chest = [-0.5, -1.0, 0.0];
+
+% 呼吸波形模型（put_vmd 信号级孪生）：
+%   'sine'（默认）：单频平滑呼吸 0.5-0.5cos(2pi t/T_b)，周期 2.4s、零谐波，
+%           使心搏带(0.8-2Hz)干净、VMD 能稳定分离心搏(1.25Hz)。雷达生命体征文献常用简化。
+%   '4seg'：四段式(与 wanzheng.m 动画同)，但其高次谐波(0.83/1.25/1.67Hz…)会落在心搏带、
+%           干扰心搏分离；可用 breath_smooth_s 圆滑拐角缓解。
+breath_model = 'sine';
+breath_smooth_s = 0.12;   % 仅 '4seg' 时使用：平滑半窗 [s]（0=不平滑）
 
 x_min_chest = -0.13; x_max_chest = 0.13;
 y_min_chest = -0.2;  y_max_chest = 0;
@@ -83,11 +91,12 @@ w_chest = 1;
 w_heart = 1e-3;
 
 % 体表心搏微动（心前区胸壁脉冲）—— put_vmd 在胸腔表面叠加与心搏同相位的高斯形变。
-% 理由：FMCW 实际测量对象是"体表复合微动"，心搏经胸壁耦合到体表产生 0.1-0.5 mm 量级
-% 位移；只靠深部心脏(权重 1e-3)时心搏分量过弱、无法从呼吸谐波中分离，故在胸腔"心前区"
-% 表面显式加入心搏脉冲用于机理验证。注：本改动仅作用于 put_vmd，wanzheng.m 动画不变。
+% 理由：FMCW 实际测量对象是"体表复合微动"，心搏经胸壁耦合到体表（文献量级约 0.1-1 mm，
+% 这里取 1 mm 以保证 VMD 能单独成模、且低 SNR 下仍稳定分离）；只靠深部心脏(权重 1e-3)
+% 时心搏分量过弱无法分离。注：本改动仅作用于 put_vmd，wanzheng.m 动画不变。
 use_cardiac_skin_pulse = true;
-d_h_card   = 0.0015;                % 心前区体表心搏位移幅度 [m]（试1.5 mm 保20dB检出）
+d_h_card   = 0.001;                  % 心前区体表心搏位移幅度 [m]（1 mm，文献心尖搏动上限量级；
+                                     % 0.5mm 太弱 VMD 难单独成模，20dB 亦不可检出）
 card_wxyz  = [0.035 0.05 0.04];      % 心前区高斯包络展宽 [m]（x, y, z）
 
 % ---- 接收机热噪声 / 器件噪声：复高斯白噪声 n~CN(0, sigma_n^2) ----
@@ -95,7 +104,10 @@ card_wxyz  = [0.035 0.05 0.04];      % 心前区高斯包络展宽 [m]（x, y, z
 %   sigma_n = RMS(无噪回波) / 10^(SNR_dB/20)，RMS 取整个回波复数幅度均方根。
 % 固定 rng 种子保证可复现；只调 SNR_dB 即可扫不同信噪比（配合 reuse_Mix=true 免重仿真）。
 add_noise = true;
-SNR_dB    = 20;                      % 信噪比 [dB]
+% 默认 45 dB：噪声按"整回波 RMS"计(σ_n=RMS/10^(SNR/20))。量测阈值：1mm 体表心搏要在
+% VMD 中成独立模态约需 >=45 dB；40 开始退化，35 及以下心搏被噪声淹没(仅呼吸仍稳)。
+% 若想演示低信噪比下的心搏失效，把 SNR_dB 调低即可。
+SNR_dB    = 45;                      % 信噪比 [dB]
 rng_seed  = 0;
 
 % ---------------- 真值（由周期推出，供对照，不硬编码） ----------------
@@ -252,20 +264,39 @@ else
     Mix = zeros(N_rx, Nsample, Nchirp, Nframe);
     fprintf('开始 %d s / %d 帧 回波仿真（进度每 50 帧打印一次）...\n', total_seconds, Nframe);
     tSim = tic;
+    % 呼吸单周期波形（按帧查表，节律仍 T_b=2.4 s = 25 次/min）
+    perB = round(T_b * fps);                        % 每周期帧数（=60）
+    ttB  = (0:perB-1)/fps;
+    switch lower(breath_model)
+        case 'sine'
+            MpB = 0.5*(1 - cos(2*pi*ttB/T_b));      % 单频、零谐波
+        case '4seg'
+            MpB = zeros(1, perB);
+            for j = 1:perB
+                tmc = ttB(j);
+                if tmc < T_in
+                    MpB(j) = sin( (pi/2)*(tmc/T_in) )^2;
+                elseif tmc < T_in + T_plateau
+                    MpB(j) = 1;
+                elseif tmc < T_in + T_plateau + T_out
+                    xq = (tmc - T_in - T_plateau)/T_out;
+                    MpB(j) = sin( (pi/2) + (pi/2)*xq )^2;
+                else
+                    MpB(j) = 0;
+                end
+            end
+            if breath_smooth_s > 0                  % 可选：圆周平滑削拐角谐波
+                nker = max(1, round(breath_smooth_s*fps));
+                kk   = -nker:nker;
+                ker  = (1 + cos(pi*kk/nker))/2; ker = ker/sum(ker);
+                MpB = cconv(MpB, ker, perB);
+            end
+        otherwise
+            error('breath_model 需为 ''sine'' 或 ''4seg''');
+    end
     for frame = 1:Nframe
+        M_t_chest = MpB(1 + mod(frame-1, perB));    % 呼吸四段式（平滑后）
         t = (frame-1)/fps;
-        % 呼吸四段式调制（胸腔）
-        t_mod_chest = mod(t, T_h_chest);
-        if t_mod_chest < T_in
-            M_t_chest = sin( (pi/2)*(t_mod_chest/T_in) )^2;
-        elseif t_mod_chest < T_in + T_plateau
-            M_t_chest = 1;
-        elseif t_mod_chest < T_in + T_plateau + T_out
-            xq = (t_mod_chest - T_in - T_plateau)/T_out;
-            M_t_chest = sin( (pi/2) + (pi/2)*xq )^2;
-        else
-            M_t_chest = 0;
-        end
         % 心搏高斯脉冲（心脏）
         t_mod_heart = mod(t, T_h_heart);
         M_t_heart = exp(-((t_mod_heart - tau_h_heart)/sigma_h_heart)^2);
@@ -331,22 +362,27 @@ end
 % 取 RX1 第一 chirp（与 main_test / wanzheng 注释段一致）
 mix1 = squeeze(Mix(1,:,1,:));                 % Nsample x Nframe
 RangeFFT = fft(mix1 .* hanning(Nsample), Nsample, 1);   % 加汉宁窗后沿快时间做 FFT
-RangeFFTcor = RangeFFT - mean(RangeFFT,2);    % 慢时间去均值（去静止杂波）
 
 % 自动选最强距离 bin（主目标所在 bin）
 [~, MaxIndex] = max(mean(abs(RangeFFT),2));
 fprintf('选中距离 bin %d（≈ %.3f m，主目标胸腔）\n', MaxIndex, (MaxIndex-1)*rangeRes);
 
-% 取该 bin 的复数序列 -> 增量相位（与 main_test 的 phi2 公式一致）
-I = real(RangeFFTcor(MaxIndex,:));
-Q = imag(RangeFFTcor(MaxIndex,:));
-phi = zeros(1,Nframe);
-for k = 2:Nframe
-    dI = I(k)-I(k-1);
-    dQ = Q(k)-Q(k-1);
-    phi(k) = phi(k-1) + ( I(k)*dQ - Q(k)*dI ) / ( I(k)^2 + Q(k)^2 );
-end
-angleDenoised = diff(phi);                    % 相位增量序列（Nframe-1 点）
+% 相位提取：直接对该 bin 的复数相量 angle 做 unwrap 后逐帧差分（不去慢时间均值）。
+% 去均值会把相量中心移到原点附近，噪声下增量相位偶发尖刺污染低频谱（因此 main_test
+% 实测里才要 f_phaseDenoise 去刺）；仿真主目标相量幅值恒定很大，不靠近原点，
+% 直接 unwrap 对噪声更稳健，呼吸率在低 SNR 下仍稳定。
+phase_bin = unwrap(angle(RangeFFT(MaxIndex,:)));      % 慢时间相位 [rad]
+angleDenoised = diff(phase_bin);                      % 相位增量序列（Nframe-1 点）
+
+% 备选：main_test 的去均值 + 增量相位公式（保留供对照）
+% RangeFFTcor = RangeFFT - mean(RangeFFT,2);
+% I = real(RangeFFTcor(MaxIndex,:)); Q = imag(RangeFFTcor(MaxIndex,:));
+% phi = zeros(1,Nframe);
+% for k=2:Nframe
+%     dI=I(k)-I(k-1); dQ=Q(k)-Q(k-1);
+%     phi(k)=phi(k-1)+(I(k)*dQ-Q(k)*dI)/(I(k)^2+Q(k)^2);
+% end
+% angleDenoised = diff(phi);
 
 % 实测数据才做的脉冲去噪（main_test 用 f_phaseDenoise，仿真数据无脉冲噪声故省略）
 % angleDenoised2 = angleDenoised;
